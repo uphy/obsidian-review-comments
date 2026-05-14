@@ -145,8 +145,17 @@ export default class ReviewCommentsPlugin extends Plugin {
       new Notice("先にテキストを選択してください");
       return;
     }
+    if (
+      selection.includes("{==") ||
+      selection.includes("==}") ||
+      selection.includes("{>>") ||
+      selection.includes("<<}")
+    ) {
+      new Notice("選択範囲に既にコメント記法が含まれています");
+      return;
+    }
     const date = formatDate(new Date(), this.settings.dateFormat);
-    const author = this.settings.authorName;
+    const author = sanitizeAuthor(this.settings.authorName);
     const placeholder = "コメントを書く";
     const wrapped = `{==${selection}==}{>>${author}|${date}|${typeTag}: ${placeholder}<<}`;
     editor.replaceSelection(wrapped);
@@ -319,6 +328,12 @@ export default class ReviewCommentsPlugin extends Plugin {
       tn.parentNode?.replaceChild(frag, tn);
     }
   }
+}
+
+function sanitizeAuthor(name: string): string {
+  const trimmed = (name || "").trim();
+  const stripped = trimmed.replace(/[|<>{}=]/g, "_");
+  return stripped || "you";
 }
 
 function formatDate(d: Date, format: "iso" | "japanese"): string {
