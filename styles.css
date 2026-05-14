@@ -1,0 +1,159 @@
+/* Floating bar with type buttons */
+.review-comment-floating-bar {
+  position: fixed;
+  z-index: 999999;
+  display: flex;
+  gap: 2px;
+  background: var(--background-primary, #ffffff);
+  color: var(--text-normal, #222);
+  border: 1px solid var(--background-modifier-border, #ccc);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+  padding: 4px;
+  user-select: none;
+  font-family: var(--font-interface, system-ui);
+  pointer-events: auto;
+  white-space: nowrap;
+}
+
+.review-comment-type-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-normal, #222);
+  padding: 5px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.review-comment-type-btn:hover {
+  background: var(--background-modifier-hover, #eee);
+}
+
+.review-comment-type-btn .rc-icon {
+  font-size: 14px;
+}
+
+/* Highlights (reading mode + live preview) */
+.review-comment-highlight,
+.review-comment-highlight-live {
+  background-color: rgba(255, 235, 100, 0.4);
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+.review-comment-highlight[data-type="ASK"] {
+  background-color: rgba(120, 180, 255, 0.35);
+}
+
+.review-comment-highlight[data-type="EDIT"] {
+  background-color: rgba(255, 170, 100, 0.4);
+}
+
+.review-comment-highlight[data-type="PRAISE"] {
+  background-color: rgba(160, 230, 160, 0.4);
+}
+
+.review-comment-meta-live {
+  opacity: 0.45;
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+
+/* Side panel cards */
+.review-comment-card {
+  background: var(--background-secondary);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  border-left: 3px solid var(--interactive-accent);
+  transition: background 0.15s ease;
+}
+
+.review-comment-card:hover {
+  background: var(--background-modifier-hover);
+}
+
+.review-comment-card[data-type="ASK"] {
+  border-left-color: #4a90e2;
+}
+
+.review-comment-card[data-type="EDIT"] {
+  border-left-color: #f5a623;
+}
+
+.review-comment-card[data-type="PRAISE"] {
+  border-left-color: #7ed321;
+}
+
+.review-comment-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.review-comment-card-icon {
+  font-size: 14px;
+}
+
+.review-comment-card-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.review-comment-card-original {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  font-style: italic;
+  word-break: break-word;
+  padding-left: 8px;
+  border-left: 2px solid var(--background-modifier-border);
+}
+
+.review-comment-card-body {
+  font-size: 13px;
+  color: var(--text-normal);
+  margin-bottom: 8px;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.review-comment-card-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.review-comment-action-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-normal);
+}
+
+.review-comment-action-btn:hover {
+  background: var(--interactive-hover);
+}
+
+.review-comment-resolve-btn:hover {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.review-comment-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}

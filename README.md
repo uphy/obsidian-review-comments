@@ -1,0 +1,84 @@
+# Obsidian Review Comments
+
+> 日本語版 README: [README.ja.md](./README.ja.md)
+
+Notion-style review comments for Obsidian. Select text, click the floating button, and add a comment. Comments are stored directly in `.md` files as **CriticMarkup**, so Claude / GPT can read the file and apply the requested edits without any export step.
+
+## Comment format
+
+```markdown
+The original {==text==}{>>shirai|2026-05-13: please rewrite<<} has an issue.
+```
+
+- `{==...==}` — highlighted span (rendered in yellow)
+- `{>>author|date: comment<<}` — comment metadata
+
+## Build
+
+```bash
+git clone https://github.com/ShotaShirai1719/obsidian-review-comments.git
+cd obsidian-review-comments
+npm install
+npm run build
+```
+
+This produces `main.js`.
+
+## Install
+
+Let `$VAULT` be the absolute path to your Obsidian vault:
+
+```bash
+mkdir -p "$VAULT/.obsidian/plugins/review-comments"
+cp main.js manifest.json styles.css "$VAULT/.obsidian/plugins/review-comments/"
+```
+
+Or, for development, symlink the working directory:
+
+```bash
+ln -s "$(pwd)" "$VAULT/.obsidian/plugins/review-comments"
+```
+
+Then in Obsidian:
+
+1. Settings → Community plugins → enable **Review Comments**
+2. Settings → Review Comments → set `Author name` to your own name
+
+## Usage
+
+1. Drag-select a span of text
+2. Click the **💬 Comment** button that appears near the selection
+3. The placeholder "コメントを書く" is selected — start typing to overwrite it
+
+Alternatively:
+
+- Select text → Command palette → `Review Comments: Add comment to selection`
+- Assign a hotkey (recommended: `Cmd + Shift + M`)
+
+## Side panel
+
+Open the comments panel from the left ribbon (speech-bubble icon) or via `Review Comments: Open comments panel`.
+
+- Click a card → jump to the corresponding location in the document
+- `Resolve` button → replace `{==text==}{>>...<<}` with `text` (deletes the comment, keeps the original text)
+
+## AI integration
+
+Pass the `.md` file directly to Claude Code or another LLM with a prompt like:
+
+> Apply the edits described in the CriticMarkup comments (`{==...==}{>>...<<}`) in this file. Remove the CriticMarkup once each comment has been applied, and restore the highlighted spans to plain text.
+
+This closes the loop: comment in Obsidian → hand off to an LLM → get a clean diff back.
+
+## Development
+
+```bash
+npm run dev   # watch mode
+npm run build # production build
+```
+
+## License
+
+[AGPL-3.0-or-later](./LICENSE).
+
+Any modified version that you distribute, **or expose over a network**, must be made available under the same license. If that's a constraint for your use case, please open an issue before integrating this plugin into a closed product.

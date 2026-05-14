@@ -1,0 +1,34 @@
+{
+  "name": "obsidian-review-comments",
+  "version": "0.1.0",
+  "description": "Notion-style review comments for Obsidian (CriticMarkup storage).",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production"
+  },
+  "keywords": ["obsidian", "comments", "criticmarkup", "review"],
+  "license": "AGPL-3.0-or-later",
+  "author": {
+    "name": "Shota Shirai",
+    "url": "https://github.com/ShotaShirai1719"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ShotaShirai1719/obsidian-review-comments.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ShotaShirai1719/obsidian-review-comments/issues"
+  },
+  "homepage": "https://github.com/ShotaShirai1719/obsidian-review-comments#readme",
+  "devDependencies": {
+    "@codemirror/state": "6.5.0",
+    "@codemirror/view": "^6.26.0",
+    "@types/node": "^20.0.0",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "^0.20.2",
+    "obsidian": "latest",
+    "tslib": "^2.6.2",
+    "typescript": "^5.4.2"
+  }
+}
