@@ -4,6 +4,7 @@ import {
   ItemView,
   MarkdownPostProcessorContext,
   MarkdownView,
+  Modal,
   Notice,
   Plugin,
   PluginSettingTab,
@@ -45,6 +46,63 @@ const TYPE_ICON: Record<string, string> = TYPES.reduce((acc, t) => {
   acc[t.tag] = t.icon;
   return acc;
 }, {} as Record<string, string>);
+
+class CommentInputModal extends Modal {
+  private readonly typeTag: string;
+  private readonly onSubmit: (body: string) => void;
+
+  constructor(app: App, typeTag: string, onSubmit: (body: string) => void) {
+    super(app);
+    this.typeTag = typeTag;
+    this.onSubmit = onSubmit;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("review-comment-modal");
+
+    this.setTitle(`Add ${this.typeTag} comment`);
+
+    contentEl.createEl("p", {
+      text: "複数行や箇条書きもそのまま入力できます。",
+      cls: "review-comment-modal-help",
+    });
+
+    const textarea = contentEl.createEl("textarea", {
+      cls: "review-comment-modal-textarea",
+    });
+    textarea.placeholder = "例:\n1. ここを修正したい\n・理由\n・補足";
+
+    const actions = contentEl.createDiv({
+      cls: "review-comment-modal-actions",
+    });
+    const cancelBtn = actions.createEl("button", {
+      text: "Cancel",
+      cls: "mod-muted",
+    });
+    const submitBtn = actions.createEl("button", {
+      text: "Add comment",
+      cls: "mod-cta",
+    });
+
+    cancelBtn.addEventListener("click", () => this.close());
+    submitBtn.addEventListener("click", () => this.submit(textarea.value));
+    textarea.addEventListener("keydown", (evt: KeyboardEvent) => {
+      if ((evt.metaKey || evt.ctrlKey) && evt.key === "Enter") {
+        evt.preventDefault();
+        this.submit(textarea.value);
+      }
+    });
+
+    window.setTimeout(() => textarea.focus(), 0);
+  }
+
+  private submit(body: string) {
+    this.onSubmit(body);
+    this.close();
+  }
+}
 
 interface ParsedMeta {
   author: string;
@@ -139,6 +197,10 @@ export default class ReviewCommentsPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
+  escapeCommentBody(body: string): string {
+    return body.replace(/<<}/g, "<< }");
+  }
+
   addCommentToSelection(editor: Editor, typeTag: string = "NOTE") {
     const selection = editor.getSelection();
     if (!selection) {
@@ -154,19 +216,18 @@ export default class ReviewCommentsPlugin extends Plugin {
       new Notice("選択範囲に既にコメント記法が含まれています");
       return;
     }
-    const date = formatDate(new Date(), this.settings.dateFormat);
-    const author = sanitizeAuthor(this.settings.authorName);
-    const placeholder = "コメントを書く";
-    const wrapped = `{==${selection}==}{>>${author}|${date}|${typeTag}: ${placeholder}<<}`;
-    editor.replaceSelection(wrapped);
-
-    const cursor = editor.getCursor();
-    const tailLen = "<<}".length;
-    const newCh = cursor.ch - tailLen - placeholder.length;
-    const startPos = { line: cursor.line, ch: newCh };
-    const endPos = { line: cursor.line, ch: newCh + placeholder.length };
-    editor.setSelection(startPos, endPos);
-    editor.focus();
+    const from = editor.getCursor("from");
+    const to = editor.getCursor("to");
+    new CommentInputModal(this.app, typeTag, (body) => {
+      const date = formatDate(new Date(), this.settings.dateFormat);
+      const author = sanitizeAuthor(this.settings.authorName);
+      const commentBody = this.escapeCommentBody(
+        body.trim() || "コメントを書く"
+      );
+      const wrapped = `{==${selection}==}{>>${author}|${date}|${typeTag}: ${commentBody}<<}`;
+      editor.replaceRange(wrapped, from, to);
+      editor.focus();
+    }).open();
   }
 
   async activateView() {
@@ -394,6 +455,7 @@ function createCommentDecorationExtension() {
 
 class CommentsView extends ItemView {
   plugin: ReviewCommentsPlugin;
+  lastMarkdownView: MarkdownView | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: ReviewCommentsPlugin) {
     super(leaf);
@@ -424,6 +486,27 @@ class CommentsView extends ItemView {
 
   async onClose() {}
 
+  getMarkdownView(): MarkdownView | null {
+    const activeMdView =
+      this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
+    if (activeMdView) {
+      this.lastMarkdownView = activeMdView;
+      return activeMdView;
+    }
+
+    if (
+      this.lastMarkdownView &&
+      this.plugin.app.workspace
+        .getLeavesOfType("markdown")
+        .some((leaf) => leaf.view === this.lastMarkdownView)
+    ) {
+      return this.lastMarkdownView;
+    }
+
+    this.lastMarkdownView = null;
+    return null;
+  }
+
   jumpTo(mdView: MarkdownView, offset: number, length: number) {
     this.plugin.app.workspace.setActiveLeaf(mdView.leaf, { focus: true });
     const editor = mdView.editor;
@@ -439,7 +522,7 @@ class CommentsView extends ItemView {
     container.empty();
     new Setting(container).setName("Review Comments").setHeading();
 
-    const mdView = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
+    const mdView = this.getMarkdownView();
     if (!mdView) {
       container.createEl("p", {
         text: "マークダウンファイルを開いてください",
@@ -499,7 +582,9 @@ class CommentsView extends ItemView {
       });
       jumpBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        this.jumpTo(mdView, match.offset, match.full.length);
+        const currentMdView = this.getMarkdownView();
+        if (!currentMdView) return;
+        this.jumpTo(currentMdView, match.offset, match.full.length);
       });
 
       const resolveBtn = actions.createEl("button", {
@@ -508,7 +593,9 @@ class CommentsView extends ItemView {
       });
       resolveBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        const editor = mdView.editor;
+        const currentMdView = this.getMarkdownView();
+        if (!currentMdView) return;
+        const editor = currentMdView.editor;
         const startPos = editor.offsetToPos(match.offset);
         const endPos = editor.offsetToPos(match.offset + match.full.length);
         editor.replaceRange(match.highlighted, startPos, endPos);
@@ -516,7 +603,9 @@ class CommentsView extends ItemView {
       });
 
       card.addEventListener("click", () => {
-        this.jumpTo(mdView, match.offset, match.full.length);
+        const currentMdView = this.getMarkdownView();
+        if (!currentMdView) return;
+        this.jumpTo(currentMdView, match.offset, match.full.length);
       });
     });
   }

@@ -163,3 +163,35 @@
   font-size: 12px;
   line-height: 1.5;
 }
+
+.review-comment-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.review-comment-modal-help {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.review-comment-modal-textarea {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font: inherit;
+  line-height: 1.5;
+  box-sizing: border-box;
+}
+
+.review-comment-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
