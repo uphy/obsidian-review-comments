@@ -30,8 +30,6 @@ const DEFAULT_SETTINGS: ReviewCommentsSettings = {
   dateFormat: "iso",
 };
 
-// CriticMarkup-style with type tag:
-// {==highlighted text==}{>>author|date|TYPE: comment<<}
 const COMMENT_REGEX = /\{==([\s\S]+?)==\}\{>>([\s\S]+?)<<\}/g;
 const VIEW_TYPE_COMMENTS = "review-comments-view";
 
@@ -47,6 +45,13 @@ const TYPE_ICON: Record<string, string> = TYPES.reduce((acc, t) => {
   return acc;
 }, {} as Record<string, string>);
 
+interface ParsedMeta {
+  author: string;
+  date: string;
+  type: string;
+  body: string;
+}
+
 class CommentInputModal extends Modal {
   private readonly typeTag: string;
   private readonly onSubmit: (body: string) => void;
@@ -61,7 +66,6 @@ class CommentInputModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("review-comment-modal");
-
     this.setTitle(`Add ${this.typeTag} comment`);
 
     contentEl.createEl("p", {
@@ -104,15 +108,7 @@ class CommentInputModal extends Modal {
   }
 }
 
-interface ParsedMeta {
-  author: string;
-  date: string;
-  type: string;
-  body: string;
-}
-
 function parseMeta(meta: string): ParsedMeta {
-  // New format: author|date|TYPE: body
   const newFmt = meta.match(/^([^|]+)\|([^|]+)\|([A-Z]+):\s*([\s\S]*)$/);
   if (newFmt) {
     return {
@@ -122,7 +118,7 @@ function parseMeta(meta: string): ParsedMeta {
       body: newFmt[4].trim(),
     };
   }
-  // Old format: author|date: body
+
   const oldFmt = meta.match(/^([^|]+)\|([^|:]+):\s*([\s\S]*)$/);
   if (oldFmt) {
     return {
@@ -132,6 +128,7 @@ function parseMeta(meta: string): ParsedMeta {
       body: oldFmt[3].trim(),
     };
   }
+
   return { author: "", date: "", type: "NOTE", body: meta };
 }
 
@@ -144,7 +141,6 @@ export default class ReviewCommentsPlugin extends Plugin {
     console.log("[ReviewComments] onload");
     await this.loadSettings();
 
-    // One command per type so each can have its own hotkey
     for (const t of TYPES) {
       this.addCommand({
         id: `add-comment-${t.id}`,
@@ -161,7 +157,7 @@ export default class ReviewCommentsPlugin extends Plugin {
     });
 
     this.addRibbonIcon("message-circle", "Review Comments", () => {
-      void this.activateView();
+      this.activateView();
     });
 
     this.registerView(
@@ -176,12 +172,12 @@ export default class ReviewCommentsPlugin extends Plugin {
     );
 
     this.setupFloatingBar();
-
     this.addSettingTab(new ReviewCommentsSettingTab(this.app, this));
   }
 
   onunload() {
     console.log("[ReviewComments] onunload");
+    this.app.workspace.detachLeavesOfType(VIEW_TYPE_COMMENTS);
     if (this.floatingBar) {
       this.floatingBar.remove();
       this.floatingBar = null;
@@ -189,8 +185,7 @@ export default class ReviewCommentsPlugin extends Plugin {
   }
 
   async loadSettings() {
-    const data = (await this.loadData()) as Partial<ReviewCommentsSettings> | null;
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, data ?? {});
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
   }
 
   async saveSettings() {
@@ -216,6 +211,7 @@ export default class ReviewCommentsPlugin extends Plugin {
       new Notice("選択範囲に既にコメント記法が含まれています");
       return;
     }
+
     const from = editor.getCursor("from");
     const to = editor.getCursor("to");
     new CommentInputModal(this.app, typeTag, (body) => {
@@ -234,29 +230,29 @@ export default class ReviewCommentsPlugin extends Plugin {
     const { workspace } = this.app;
     const existing = workspace.getLeavesOfType(VIEW_TYPE_COMMENTS);
     if (existing.length > 0) {
-      await workspace.revealLeaf(existing[0]);
+      workspace.revealLeaf(existing[0]);
       return;
     }
+
     const leaf = workspace.getRightLeaf(false);
     if (leaf) {
       await leaf.setViewState({ type: VIEW_TYPE_COMMENTS, active: true });
-      await workspace.revealLeaf(leaf);
+      workspace.revealLeaf(leaf);
     }
   }
 
-  // --- Floating bar (4 type buttons) ---
   setupFloatingBar() {
-    const doc = activeDocument;
-    const bar = doc.body.createDiv({ cls: "review-comment-floating-bar is-hidden" });
+    const bar = document.createElement("div");
+    bar.className = "review-comment-floating-bar";
+    bar.style.display = "none";
+    document.body.appendChild(bar);
     this.floatingBar = bar;
 
     for (const t of TYPES) {
-      const btn = bar.createEl("button", {
-        cls: "review-comment-type-btn",
-        attr: { title: `${t.label} (insert ${t.tag})` },
-      });
-      btn.createSpan({ cls: "rc-icon", text: t.icon });
-      btn.createSpan({ cls: "rc-label", text: t.label });
+      const btn = document.createElement("button");
+      btn.className = "review-comment-type-btn";
+      btn.title = `${t.label} (insert ${t.tag})`;
+      btn.innerHTML = `<span class="rc-icon">${t.icon}</span><span class="rc-label">${t.label}</span>`;
       btn.addEventListener("mousedown", (e) => e.preventDefault());
       btn.addEventListener("click", (e) => {
         e.preventDefault();
@@ -267,9 +263,10 @@ export default class ReviewCommentsPlugin extends Plugin {
         }
         this.hideFloatingBar();
       });
+      bar.appendChild(btn);
     }
 
-    this.registerDomEvent(doc, "selectionchange", () => {
+    this.registerDomEvent(document, "selectionchange", () => {
       if (this.selectionDebounce !== null) {
         window.clearTimeout(this.selectionDebounce);
       }
@@ -283,7 +280,7 @@ export default class ReviewCommentsPlugin extends Plugin {
       capture: true,
     });
 
-    this.registerDomEvent(doc, "keydown", (e: KeyboardEvent) => {
+    this.registerDomEvent(document, "keydown", (e: KeyboardEvent) => {
       if (e.key === "Escape") this.hideFloatingBar();
     });
   }
@@ -317,7 +314,7 @@ export default class ReviewCommentsPlugin extends Plugin {
     }
 
     const bar = this.floatingBar;
-    bar.removeClass("is-hidden");
+    bar.style.display = "flex";
     const barWidth = bar.offsetWidth || 280;
     const barHeight = bar.offsetHeight || 36;
 
@@ -332,15 +329,13 @@ export default class ReviewCommentsPlugin extends Plugin {
       top = rect.bottom + 6;
     }
 
-    bar.setCssProps({
-      "--rc-bar-left": `${left}px`,
-      "--rc-bar-top": `${top}px`,
-    });
+    bar.style.left = `${left}px`;
+    bar.style.top = `${top}px`;
   }
 
   hideFloatingBar() {
     if (this.floatingBar) {
-      this.floatingBar.addClass("is-hidden");
+      this.floatingBar.style.display = "none";
     }
   }
 
@@ -348,30 +343,31 @@ export default class ReviewCommentsPlugin extends Plugin {
     el: HTMLElement,
     _ctx: MarkdownPostProcessorContext
   ) {
-    const doc = el.ownerDocument;
-    const walker = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
     const textNodes: Text[] = [];
     let node: Node | null;
     while ((node = walker.nextNode())) {
       textNodes.push(node as Text);
     }
+
     for (const tn of textNodes) {
       const text = tn.textContent || "";
       if (text.indexOf("{==") === -1) continue;
+
       const regex = new RegExp(COMMENT_REGEX);
       let m: RegExpExecArray | null;
       let lastIndex = 0;
-      const frag = doc.createDocumentFragment();
+      const frag = document.createDocumentFragment();
       let matched = false;
+
       while ((m = regex.exec(text))) {
         matched = true;
         if (m.index > lastIndex) {
-          frag.appendChild(
-            doc.createTextNode(text.slice(lastIndex, m.index))
-          );
+          frag.appendChild(document.createTextNode(text.slice(lastIndex, m.index)));
         }
+
         const meta = parseMeta(m[2]);
-        const span = doc.createElement("span");
+        const span = document.createElement("span");
         span.className = "review-comment-highlight";
         span.dataset.type = meta.type;
         span.textContent = m[1];
@@ -382,9 +378,10 @@ export default class ReviewCommentsPlugin extends Plugin {
         frag.appendChild(span);
         lastIndex = m.index + m[0].length;
       }
+
       if (!matched) continue;
       if (lastIndex < text.length) {
-        frag.appendChild(doc.createTextNode(text.slice(lastIndex)));
+        frag.appendChild(document.createTextNode(text.slice(lastIndex)));
       }
       tn.parentNode?.replaceChild(frag, tn);
     }
@@ -405,7 +402,6 @@ function formatDate(d: Date, format: "iso" | "japanese"): string {
   return `${y}-${m}-${day}`;
 }
 
-// Live-preview decoration
 function createCommentDecorationExtension() {
   return ViewPlugin.fromClass(
     class {
@@ -426,6 +422,7 @@ function createCommentDecorationExtension() {
         const text = view.state.doc.toString();
         const regex = new RegExp(COMMENT_REGEX);
         let m: RegExpExecArray | null;
+
         while ((m = regex.exec(text))) {
           const start = m.index;
           const highlightTextStart = start + 3;
@@ -444,6 +441,7 @@ function createCommentDecorationExtension() {
             Decoration.mark({ class: "review-comment-meta-live" })
           );
         }
+
         return builder.finish();
       }
     },
@@ -541,6 +539,7 @@ class CommentsView extends ItemView {
     };
     const matches: Match[] = [];
     let m: RegExpExecArray | null;
+
     while ((m = regex.exec(text))) {
       matches.push({
         highlighted: m[1],
@@ -582,9 +581,7 @@ class CommentsView extends ItemView {
       });
       jumpBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        const currentMdView = this.getMarkdownView();
-        if (!currentMdView) return;
-        this.jumpTo(currentMdView, match.offset, match.full.length);
+        this.jumpTo(mdView, match.offset, match.full.length);
       });
 
       const resolveBtn = actions.createEl("button", {
@@ -593,19 +590,15 @@ class CommentsView extends ItemView {
       });
       resolveBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        const currentMdView = this.getMarkdownView();
-        if (!currentMdView) return;
-        const editor = currentMdView.editor;
-        const startPos = editor.offsetToPos(match.offset);
-        const endPos = editor.offsetToPos(match.offset + match.full.length);
-        editor.replaceRange(match.highlighted, startPos, endPos);
+        const editor = mdView.editor;
+        const value = editor.getValue();
+        const newValue = value.replace(match.full, match.highlighted);
+        editor.setValue(newValue);
         this.renderComments();
       });
 
       card.addEventListener("click", () => {
-        const currentMdView = this.getMarkdownView();
-        if (!currentMdView) return;
-        this.jumpTo(currentMdView, match.offset, match.full.length);
+        this.jumpTo(mdView, match.offset, match.full.length);
       });
     });
   }
@@ -648,12 +641,13 @@ class ReviewCommentsSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl).setName("コメント種別").setHeading();
+    containerEl.createEl("h3", { text: "コメント種別" });
     const list = containerEl.createEl("ul");
     for (const t of TYPES) {
       const li = list.createEl("li");
       li.textContent = `${t.icon} ${t.label} → タグ: ${t.tag}（コマンド: Add ${t.label} comment）`;
     }
+
     containerEl.createEl("p", {
       text: "各タイプは個別コマンドとして登録されているので、設定→ホットキーで好きなショートカットを割り当てられます。",
       cls: "setting-item-description",

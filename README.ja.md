@@ -46,7 +46,7 @@ ln -s "$(pwd)" "$VAULT/.obsidian/plugins/review-comments"
 
 1. テキストをドラッグで選択
 2. 選択範囲の右上に表示される **💬 Comment** ボタンをクリック
-3. 「コメントを書く」のプレースホルダが選択状態になるので、そのまま入力
+3. モーダルにコメントを入力する。複数行や箇条書きもそのまま書ける
 
 または:
 - 選択 → コマンドパレット → `Review Comments: Add comment to selection`
@@ -56,7 +56,7 @@ ln -s "$(pwd)" "$VAULT/.obsidian/plugins/review-comments"
 
 左リボンの吹き出しアイコン、または `Review Comments: Open comments panel` コマンドで開く。
 
-- カードクリック … 該当箇所にジャンプ
+- カードクリック / `Jump` … 該当箇所にジャンプ
 - `Resolve` ボタン … `{==text==}{>>...<<}` を `text` に置換（コメント削除）
 
 ## AI連携

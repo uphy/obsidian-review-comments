@@ -48,7 +48,7 @@ Then in Obsidian:
 
 1. Drag-select a span of text
 2. Click the **💬 Comment** button that appears near the selection
-3. The placeholder "コメントを書く" is selected — start typing to overwrite it
+3. Enter your comment in the modal. Multiline notes and bullet lists are supported.
 
 Alternatively:
 
@@ -59,7 +59,7 @@ Alternatively:
 
 Open the comments panel from the left ribbon (speech-bubble icon) or via `Review Comments: Open comments panel`.
 
-- Click a card → jump to the corresponding location in the document
+- Click a card or `Jump` → jump to the corresponding location in the document
 - `Resolve` button → replace `{==text==}{>>...<<}` with `text` (deletes the comment, keeps the original text)
 
 ## AI integration
