@@ -253,7 +253,10 @@
 }
 
 .review-comment-bubble-popover-close:hover {
-  background: var(--background-modifier-error, rgba(230, 70, 70, 0.15));
+  /* --background-modifier-errorはテーマによって不透明な濃い赤になることが
+     あり悪目立ちするため、他の箇所と同じcolor-mixで薄い赤を作る */
+  background: rgba(230, 70, 70, 0.15);
+  background: color-mix(in srgb, var(--text-error, #e64646) 15%, transparent);
   color: var(--text-error, #e64646);
 }
 
