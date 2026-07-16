@@ -59,6 +59,27 @@
   padding: 0 2px;
 }
 
+/* 見出しは本文よりフォントサイズがずっと大きいため、外枠にある本文サイズ
+   基準の細い破線をそのまま使うと不釣り合いに見える（境界線がノイズに見
+   えてしまう）。外枠の破線は消し、見出し要素自身の下にフォントサイズに
+   追従する太さ（em基準）の破線を引き直す。アイコンも合わせて少し大きくする。 */
+.review-comment-widget:has(> .review-comment-widget-content > :is(h1, h2, h3, h4, h5, h6)),
+.review-comment-highlight:has(> .review-comment-highlight-content > :is(h1, h2, h3, h4, h5, h6)) {
+  border-bottom: none;
+}
+
+.review-comment-widget-content > :is(h1, h2, h3, h4, h5, h6),
+.review-comment-highlight-content > :is(h1, h2, h3, h4, h5, h6) {
+  border-bottom: 0.08em dashed rgba(180, 150, 0, 0.55);
+  border-bottom: 0.08em dashed color-mix(in srgb, var(--review-comment-accent) 75%, transparent);
+}
+
+.review-comment-widget:has(> .review-comment-widget-content > :is(h1, h2, h3, h4, h5, h6)) > .review-comment-bubble-btn,
+.review-comment-highlight:has(> .review-comment-highlight-content > :is(h1, h2, h3, h4, h5, h6)) > .review-comment-bubble-btn {
+  width: 26px;
+  height: 26px;
+}
+
 .review-comment-anchor[data-type="ASK"] {
   --review-comment-accent: var(--color-blue, #4a90e2);
   background-color: rgba(74, 144, 226, 0.22);
