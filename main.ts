@@ -38,6 +38,8 @@ const DEFAULT_SETTINGS: ReviewCommentsSettings = {
 };
 
 const COMMENT_REGEX = /\{==([\s\S]+?)==\}\{>>([\s\S]+?)<<\}/g;
+/** compositionend後、compositionstartが即座に再発火しないか待つグレース期間(ms) */
+const COMPOSITION_END_GRACE_MS = 150;
 const VIEW_TYPE_COMMENTS = "review-comments-view";
 
 const TYPES: { id: string; tag: string; label: string; icon: string; lucide: string }[] = [
@@ -304,6 +306,8 @@ export default class ReviewCommentsPlugin extends Plugin {
   selectionDebounce: number | null = null;
   /** 日本語入力などIME変換中はtrue。変換候補の下線がDOM選択として拾われてしまうのを避ける */
   isComposing: boolean = false;
+  /** compositionend後にisComposingをfalseへ戻す猶予タイマーのID */
+  compositionEndGrace: number | null = null;
   /** 直後にwidget化される新規コメントの開始オフセット（1回だけ消費してpulse演出を出す） */
   pendingPulseOffset: number | null = null;
 
@@ -464,6 +468,7 @@ export default class ReviewCommentsPlugin extends Plugin {
     }
 
     this.registerDomEvent(document, "selectionchange", () => {
+      if (this.isComposing) return;
       if (this.selectionDebounce !== null) {
         window.clearTimeout(this.selectionDebounce);
       }
@@ -475,20 +480,31 @@ export default class ReviewCommentsPlugin extends Plugin {
 
     // IME変換中は候補文字列がDOM上「選択」として見え、selectionchangeが発火して
     // バーがちらつく。compositionstart〜compositionendの間は強制的に隠す。
-    this.registerDomEvent(document, "compositionstart", () => {
+    // スペースキーでの変換候補選択時などはcompositionendの直後にcompositionstart
+    // が即座に再発火することがあるため、compositionendはグレース期間を置いてから
+    // 反映し、その間に次のcompositionstart/updateが来たら「継続中」とみなす。
+    const clearCompositionEndGrace = () => {
+      if (this.compositionEndGrace === null) return;
+      window.clearTimeout(this.compositionEndGrace);
+      this.compositionEndGrace = null;
+    };
+
+    const enterComposing = () => {
+      clearCompositionEndGrace();
       this.isComposing = true;
       this.hideFloatingBar();
-    });
+    };
+
+    this.registerDomEvent(document, "compositionstart", enterComposing);
+    this.registerDomEvent(document, "compositionupdate", enterComposing);
 
     this.registerDomEvent(document, "compositionend", () => {
-      this.isComposing = false;
-      if (this.selectionDebounce !== null) {
-        window.clearTimeout(this.selectionDebounce);
-      }
-      this.selectionDebounce = window.setTimeout(
-        () => this.updateFloatingBar(),
-        80
-      );
+      clearCompositionEndGrace();
+      this.compositionEndGrace = window.setTimeout(() => {
+        this.compositionEndGrace = null;
+        this.isComposing = false;
+        this.updateFloatingBar();
+      }, COMPOSITION_END_GRACE_MS);
     });
 
     this.registerDomEvent(window, "scroll", () => this.hideFloatingBar(), {
