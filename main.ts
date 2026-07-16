@@ -1,8 +1,10 @@
 import {
   App,
+  Component,
   Editor,
   ItemView,
   MarkdownPostProcessorContext,
+  MarkdownRenderer,
   MarkdownView,
   Modal,
   Notice,
@@ -10,6 +12,8 @@ import {
   PluginSettingTab,
   Setting,
   WorkspaceLeaf,
+  editorInfoField,
+  setIcon,
 } from "obsidian";
 import {
   Decoration,
@@ -17,6 +21,7 @@ import {
   EditorView,
   ViewPlugin,
   ViewUpdate,
+  WidgetType,
 } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
 
@@ -33,17 +38,21 @@ const DEFAULT_SETTINGS: ReviewCommentsSettings = {
 const COMMENT_REGEX = /\{==([\s\S]+?)==\}\{>>([\s\S]+?)<<\}/g;
 const VIEW_TYPE_COMMENTS = "review-comments-view";
 
-const TYPES: { id: string; tag: string; label: string; icon: string }[] = [
-  { id: "ask", tag: "ASK", label: "Ask", icon: "❓" },
-  { id: "edit", tag: "EDIT", label: "Edit", icon: "✏️" },
-  { id: "praise", tag: "PRAISE", label: "Praise", icon: "👍" },
-  { id: "note", tag: "NOTE", label: "Note", icon: "💬" },
+const TYPES: { id: string; tag: string; label: string; icon: string; lucide: string }[] = [
+  { id: "ask", tag: "ASK", label: "Ask", icon: "❓", lucide: "help-circle" },
+  { id: "edit", tag: "EDIT", label: "Edit", icon: "✏️", lucide: "pencil" },
+  { id: "praise", tag: "PRAISE", label: "Praise", icon: "👍", lucide: "thumbs-up" },
+  { id: "note", tag: "NOTE", label: "Note", icon: "💬", lucide: "message-circle" },
 ];
 
-const TYPE_ICON: Record<string, string> = TYPES.reduce((acc, t) => {
-  acc[t.tag] = t.icon;
-  return acc;
-}, {} as Record<string, string>);
+// 吹き出しボタンはテーマに追従するLucideアイコンを使う（絵文字はOS依存でテーマ色に馴染まないため）
+const TYPE_META: Record<string, { icon: string; lucide: string }> = TYPES.reduce(
+  (acc, t) => {
+    acc[t.tag] = { icon: t.icon, lucide: t.lucide };
+    return acc;
+  },
+  {} as Record<string, { icon: string; lucide: string }>
+);
 
 interface ParsedMeta {
   author: string;
@@ -132,10 +141,167 @@ function parseMeta(meta: string): ParsedMeta {
   return { author: "", date: "", type: "NOTE", body: meta };
 }
 
+/**
+ * MarkdownRenderer.render は常にブロック要素でラップして返すため、
+ * ハイライト対象が単一の <p> になっている場合はその中身だけ展開して
+ * インライン文脈（表セル・見出し以外の地の文など）に自然に溶け込ませる。
+ * 見出し・リスト等のブロック構文はそのまま挿入する。
+ */
+async function renderIntoInlineContext(
+  app: App,
+  markdown: string,
+  target: HTMLElement,
+  sourcePath: string,
+  component: Component
+) {
+  const tmp = document.createElement("div");
+  await MarkdownRenderer.render(app, markdown, tmp, sourcePath, component);
+  if (tmp.children.length === 1 && tmp.firstElementChild?.tagName === "P") {
+    const p = tmp.firstElementChild;
+    while (p.firstChild) target.appendChild(p.firstChild);
+  } else {
+    while (tmp.firstChild) target.appendChild(tmp.firstChild);
+  }
+}
+
+/**
+ * 吹き出しボタン＋クリックで開閉するポップオーバーを container に追加する。
+ * onDelete を渡すと、ポップオーバー右上に削除（×）ボタンが付き、クリックで
+ * コメント記法を除去してハイライトされていたテキストだけを残す。
+ */
+function appendCommentBubble(
+  container: HTMLElement,
+  meta: ParsedMeta,
+  onDelete?: () => void
+) {
+  container.addClass("review-comment-anchor");
+  container.dataset.type = meta.type;
+
+  const btn = container.createEl("button", {
+    cls: "review-comment-bubble-btn",
+    attr: { type: "button", "aria-label": "コメントを表示" },
+  });
+  setIcon(btn, TYPE_META[meta.type]?.lucide || "message-circle");
+
+  const popover = container.createDiv({ cls: "review-comment-bubble-popover" });
+
+  if (onDelete) {
+    const closeBtn = popover.createEl("button", {
+      cls: "review-comment-bubble-popover-close",
+      attr: { type: "button", "aria-label": "コメントを削除" },
+    });
+    setIcon(closeBtn, "x");
+    closeBtn.addEventListener("mousedown", (e) => e.preventDefault());
+    closeBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeAllCommentPopovers();
+      onDelete();
+    });
+  }
+
+  const header = popover.createDiv({ cls: "review-comment-bubble-popover-header" });
+  header.setText(`${meta.author} · ${meta.date}`);
+  const body = popover.createDiv({ cls: "review-comment-bubble-popover-body" });
+  body.setText(meta.body);
+
+  btn.addEventListener("mousedown", (e) => e.preventDefault());
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const isOpen = popover.hasClass("is-open");
+    closeAllCommentPopovers();
+    if (!isOpen) popover.addClass("is-open");
+  });
+}
+
+function closeAllCommentPopovers() {
+  document
+    .querySelectorAll(".review-comment-bubble-popover.is-open")
+    .forEach((el) => el.removeClass("is-open"));
+}
+
+class CommentWidget extends WidgetType {
+  // Markdown再レンダリングが登録する子コンポーネントを受け止める専用インスタンス。
+  // decoration再構築のたびにwidgetは使い捨てられるため、destroy()でunloadして
+  // 蓄積させない（親のPluginをcomponentとして使い回すと解放されずリークする）。
+  private renderComponent: Component | null = null;
+
+  constructor(
+    private readonly highlighted: string,
+    private readonly meta: ParsedMeta,
+    private readonly app: App,
+    private readonly sourcePath: string,
+    private readonly range: { from: number; to: number },
+    private readonly pulse: boolean = false
+  ) {
+    super();
+  }
+
+  eq(other: CommentWidget): boolean {
+    // pulse は意図的に比較から除外する。挿入直後に1回だけpulseクラス付きで
+    // 生成したDOM要素は、以後decorationが再構築されても使い回されてよく
+    // （CSSアニメーションは1回再生されればそのまま自然に終わる）、比較に
+    // 含めるとpulse終了後にDOM要素が余分に作り直されてしまう。
+    return (
+      other.highlighted === this.highlighted &&
+      other.sourcePath === this.sourcePath &&
+      other.range.from === this.range.from &&
+      other.range.to === this.range.to &&
+      other.meta.type === this.meta.type &&
+      other.meta.author === this.meta.author &&
+      other.meta.date === this.meta.date &&
+      other.meta.body === this.meta.body
+    );
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const wrapper = document.createElement("span");
+    wrapper.className = "review-comment-widget";
+    if (this.pulse) {
+      wrapper.addClass("review-comment-widget-pulse");
+    }
+
+    this.renderComponent = new Component();
+    this.renderComponent.load();
+
+    const content = wrapper.createSpan({ cls: "review-comment-widget-content" });
+    void renderIntoInlineContext(
+      this.app,
+      this.highlighted,
+      content,
+      this.sourcePath,
+      this.renderComponent
+    );
+
+    appendCommentBubble(wrapper, this.meta, () => {
+      view.dispatch({
+        changes: {
+          from: this.range.from,
+          to: this.range.to,
+          insert: this.highlighted,
+        },
+      });
+    });
+    return wrapper;
+  }
+
+  destroy(): void {
+    this.renderComponent?.unload();
+    this.renderComponent = null;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
 export default class ReviewCommentsPlugin extends Plugin {
   settings: ReviewCommentsSettings = DEFAULT_SETTINGS;
   floatingBar: HTMLDivElement | null = null;
   selectionDebounce: number | null = null;
+  /** 直後にwidget化される新規コメントの開始オフセット（1回だけ消費してpulse演出を出す） */
+  pendingPulseOffset: number | null = null;
 
   async onload() {
     console.log("[ReviewComments] onload");
@@ -165,11 +331,18 @@ export default class ReviewCommentsPlugin extends Plugin {
       (leaf) => new CommentsView(leaf, this)
     );
 
-    this.registerEditorExtension([createCommentDecorationExtension()]);
+    this.registerEditorExtension([createCommentDecorationExtension(this)]);
 
     this.registerMarkdownPostProcessor((el, ctx) =>
       this.renderCommentsInReadingMode(el, ctx)
     );
+
+    this.registerDomEvent(document, "click", (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target || !target.closest(".review-comment-anchor")) {
+        closeAllCommentPopovers();
+      }
+    });
 
     this.setupFloatingBar();
     this.addSettingTab(new ReviewCommentsSettingTab(this.app, this));
@@ -373,7 +546,7 @@ export default class ReviewCommentsPlugin extends Plugin {
         span.textContent = m[1];
         span.setAttribute(
           "title",
-          `${TYPE_ICON[meta.type] || ""} ${meta.author} | ${meta.date}\n${meta.body}`
+          `${TYPE_META[meta.type]?.icon || ""} ${meta.author} | ${meta.date}\n${meta.body}`
         );
         frag.appendChild(span);
         lastIndex = m.index + m[0].length;
@@ -402,7 +575,7 @@ function formatDate(d: Date, format: "iso" | "japanese"): string {
   return `${y}-${m}-${day}`;
 }
 
-function createCommentDecorationExtension() {
+function createCommentDecorationExtension(plugin: ReviewCommentsPlugin) {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
@@ -412,7 +585,11 @@ function createCommentDecorationExtension() {
       }
 
       update(update: ViewUpdate) {
-        if (update.docChanged || update.viewportChanged) {
+        if (
+          update.docChanged ||
+          update.viewportChanged ||
+          update.selectionSet
+        ) {
           this.decorations = this.buildDecorations(update.view);
         }
       }
@@ -422,24 +599,56 @@ function createCommentDecorationExtension() {
         const text = view.state.doc.toString();
         const regex = new RegExp(COMMENT_REGEX);
         let m: RegExpExecArray | null;
+        const ranges = view.state.selection.ranges;
+        const info = view.state.field(editorInfoField, false);
+        const sourcePath = info?.file?.path ?? "";
 
         while ((m = regex.exec(text))) {
           const start = m.index;
-          const highlightTextStart = start + 3;
-          const highlightTextEnd = highlightTextStart + m[1].length;
-          const metaStart = highlightTextEnd + 2;
           const end = start + m[0].length;
+          // カーソル・選択範囲がこのコメントの内部に実際に入り込んでいるとき
+          // だけ生のCriticMarkup記法のまま編集させる（wikilinkのconcealと同
+          // じfocus-awareパターン）。境界にちょうど接しているだけ（例:挿入
+          // 直後にキャレットがコメント直後にある状態）はrendered mode（widget
+          // 表示）のままにする。マルチカーソルの場合は全rangeを見る。
+          const cursorInside = ranges.some((r) => r.from < end && r.to > start);
 
-          builder.add(
-            highlightTextStart,
-            highlightTextEnd,
-            Decoration.mark({ class: "review-comment-highlight-live" })
-          );
-          builder.add(
-            metaStart,
-            end,
-            Decoration.mark({ class: "review-comment-meta-live" })
-          );
+          if (cursorInside) {
+            const highlightTextStart = start + 3;
+            const highlightTextEnd = highlightTextStart + m[1].length;
+            const metaStart = highlightTextEnd + 2;
+
+            builder.add(
+              highlightTextStart,
+              highlightTextEnd,
+              Decoration.mark({ class: "review-comment-highlight-live" })
+            );
+            builder.add(
+              metaStart,
+              end,
+              Decoration.mark({ class: "review-comment-meta-live" })
+            );
+          } else {
+            const meta = parseMeta(m[2]);
+            const isPulseTarget = plugin.pendingPulseOffset === start;
+            if (isPulseTarget) {
+              plugin.pendingPulseOffset = null;
+            }
+            builder.add(
+              start,
+              end,
+              Decoration.replace({
+                widget: new CommentWidget(
+                  m[1],
+                  meta,
+                  plugin.app,
+                  sourcePath,
+                  { from: start, to: end },
+                  isPulseTarget
+                ),
+              })
+            );
+          }
         }
 
         return builder.finish();
@@ -564,7 +773,7 @@ class CommentsView extends ItemView {
 
       const header = card.createDiv({ cls: "review-comment-card-header" });
       const icon = header.createSpan({ cls: "review-comment-card-icon" });
-      icon.textContent = TYPE_ICON[match.meta.type] || "💬";
+      icon.textContent = TYPE_META[match.meta.type]?.icon || "💬";
       const meta = header.createSpan({ cls: "review-comment-card-meta" });
       meta.textContent = `${match.meta.author} · ${match.meta.date}`;
 

@@ -39,30 +39,163 @@
   font-size: 14px;
 }
 
-/* Highlights (reading mode + live preview) */
+/*
+ * Highlights (reading mode + live preview)
+ * 色はObsidianの名前付きアクセントカラー変数（--color-*）をcolor-mixで薄めて使う
+ * ことでテーマに追従させる。color-mix未対応環境向けに直前のrgba宣言をフォール
+ * バックとして残す。
+ * NOTE色（既定）はObsidianネイティブの==highlight==とほぼ同じ黄色になるため、
+ * 下の破線ボーダーで色以外の識別チャネルを持たせて見分けられるようにする。
+ */
 .review-comment-highlight,
-.review-comment-highlight-live {
-  background-color: rgba(255, 235, 100, 0.4);
+.review-comment-highlight-live,
+.review-comment-widget {
+  --review-comment-accent: var(--color-yellow, #ffdd55);
+  background-color: rgba(255, 221, 85, 0.35);
+  background-color: color-mix(in srgb, var(--review-comment-accent) 30%, transparent);
+  border-bottom: 2px dashed rgba(180, 150, 0, 0.55);
+  border-bottom: 2px dashed color-mix(in srgb, var(--review-comment-accent) 75%, transparent);
   border-radius: 2px;
   padding: 0 2px;
 }
 
-.review-comment-highlight[data-type="ASK"] {
-  background-color: rgba(120, 180, 255, 0.35);
+.review-comment-anchor[data-type="ASK"] {
+  --review-comment-accent: var(--color-blue, #4a90e2);
+  background-color: rgba(74, 144, 226, 0.22);
+  background-color: color-mix(in srgb, var(--review-comment-accent) 20%, transparent);
+  border-bottom-color: rgba(74, 144, 226, 0.6);
+  border-bottom-color: color-mix(in srgb, var(--review-comment-accent) 70%, transparent);
 }
 
-.review-comment-highlight[data-type="EDIT"] {
-  background-color: rgba(255, 170, 100, 0.4);
+.review-comment-anchor[data-type="EDIT"] {
+  --review-comment-accent: var(--color-orange, #f5a623);
+  background-color: rgba(245, 166, 35, 0.25);
+  background-color: color-mix(in srgb, var(--review-comment-accent) 25%, transparent);
+  border-bottom-color: rgba(245, 166, 35, 0.65);
+  border-bottom-color: color-mix(in srgb, var(--review-comment-accent) 75%, transparent);
 }
 
-.review-comment-highlight[data-type="PRAISE"] {
-  background-color: rgba(160, 230, 160, 0.4);
+.review-comment-anchor[data-type="PRAISE"] {
+  --review-comment-accent: var(--color-green, #7ed321);
+  background-color: rgba(126, 211, 33, 0.25);
+  background-color: color-mix(in srgb, var(--review-comment-accent) 25%, transparent);
+  border-bottom-color: rgba(126, 211, 33, 0.65);
+  border-bottom-color: color-mix(in srgb, var(--review-comment-accent) 75%, transparent);
 }
 
 .review-comment-meta-live {
   opacity: 0.45;
   font-size: 0.85em;
   color: var(--text-muted);
+}
+
+/* Live Preview widget: CriticMarkup記号を消して中身をMarkdown再レンダリングしたもの */
+.review-comment-widget {
+  position: relative;
+  display: inline-block;
+  vertical-align: baseline;
+}
+
+.review-comment-widget-content,
+.review-comment-highlight-content {
+  display: inline;
+}
+
+.review-comment-widget-content > p,
+.review-comment-highlight-content > p {
+  display: inline;
+  margin: 0;
+}
+
+/* 吹き出しボタン＋クリックで開閉するポップオーバー（Live Preview / Reading View共通） */
+.review-comment-bubble-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: 3px;
+  border-radius: 50%;
+  border: none;
+  background: var(--background-modifier-hover, #eee);
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  vertical-align: middle;
+}
+
+.review-comment-bubble-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.review-comment-bubble-btn:hover {
+  background: var(--interactive-hover);
+  color: var(--text-normal);
+}
+
+.review-comment-bubble-popover {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  margin-top: 4px;
+  min-width: 220px;
+  max-width: 360px;
+  background: var(--background-primary, #ffffff);
+  border: 1px solid var(--background-modifier-border, #ccc);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+  padding: 8px 10px 8px 10px;
+  font-size: 12px;
+  white-space: normal;
+}
+
+.review-comment-bubble-popover.is-open {
+  display: block;
+}
+
+.review-comment-bubble-popover-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.review-comment-bubble-popover-close svg {
+  width: 12px;
+  height: 12px;
+}
+
+.review-comment-bubble-popover-close:hover {
+  background: var(--background-modifier-error, rgba(230, 70, 70, 0.15));
+  color: var(--text-error, #e64646);
+}
+
+.review-comment-bubble-popover-header {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+  margin-bottom: 4px;
+  padding-right: 20px;
+}
+
+.review-comment-bubble-popover-body {
+  color: var(--text-normal);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* Side panel cards */
