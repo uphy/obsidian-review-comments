@@ -96,6 +96,31 @@
   vertical-align: baseline;
 }
 
+/* コメント確定直後の着地点を示すパルス演出。背景色（typeごとに違う）には
+   触れず、輪郭（box-shadow）だけを2回明滅させて注意を引く。色はハイライト
+   自体のアクセントカラー（--review-comment-accent、typeごとに変わる）に
+   合わせるので、周りの背景色と衝突しない。
+   animation-fill-modeは指定しない＝再生後は自然に「box-shadowなし」の通常
+   状態へ戻るので、JS側でクラスを外す後始末は不要。 */
+@keyframes review-comment-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  15%,
+  55% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--review-comment-accent, #ffdd55) 80%, transparent);
+  }
+  35%,
+  75% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.review-comment-widget-pulse {
+  animation: review-comment-pulse 1.4s ease-in-out;
+}
+
 .review-comment-widget-content,
 .review-comment-highlight-content {
   display: inline;

@@ -394,9 +394,29 @@ export default class ReviewCommentsPlugin extends Plugin {
         body.trim() || "コメントを書く"
       );
       const wrapped = `{==${selection}==}{>>${author}|${date}|${typeTag}: ${commentBody}<<}`;
+      const insertOffset = editor.posToOffset(from);
       editor.replaceRange(wrapped, from, to);
+      this.pendingPulseOffset = insertOffset;
+      this.placeCaretAfterInsertion(editor, insertOffset, wrapped);
+      this.hideFloatingBar();
       editor.focus();
     }).open();
+  }
+
+  /**
+   * コメント挿入直後は選択範囲がハイライト全体を覆ったままになる。選択を
+   * キャレットだけの状態にリセットし、挿入した記法の直後に置く。
+   * focus-aware判定（createCommentDecorationExtension）は範囲の境界に接し
+   * ているだけでは「中」とみなさないので、このキャレット位置ならwidget化
+   * された表示（rendered mode）のまま保たれる。
+   */
+  placeCaretAfterInsertion(
+    editor: Editor,
+    insertOffset: number,
+    wrapped: string
+  ) {
+    const insertEndPos = editor.offsetToPos(insertOffset + wrapped.length);
+    editor.setSelection(insertEndPos, insertEndPos);
   }
 
   async activateView() {
