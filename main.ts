@@ -302,6 +302,8 @@ export default class ReviewCommentsPlugin extends Plugin {
   settings: ReviewCommentsSettings = DEFAULT_SETTINGS;
   floatingBar: HTMLDivElement | null = null;
   selectionDebounce: number | null = null;
+  /** 日本語入力などIME変換中はtrue。変換候補の下線がDOM選択として拾われてしまうのを避ける */
+  isComposing: boolean = false;
   /** 直後にwidget化される新規コメントの開始オフセット（1回だけ消費してpulse演出を出す） */
   pendingPulseOffset: number | null = null;
 
@@ -471,6 +473,24 @@ export default class ReviewCommentsPlugin extends Plugin {
       );
     });
 
+    // IME変換中は候補文字列がDOM上「選択」として見え、selectionchangeが発火して
+    // バーがちらつく。compositionstart〜compositionendの間は強制的に隠す。
+    this.registerDomEvent(document, "compositionstart", () => {
+      this.isComposing = true;
+      this.hideFloatingBar();
+    });
+
+    this.registerDomEvent(document, "compositionend", () => {
+      this.isComposing = false;
+      if (this.selectionDebounce !== null) {
+        window.clearTimeout(this.selectionDebounce);
+      }
+      this.selectionDebounce = window.setTimeout(
+        () => this.updateFloatingBar(),
+        80
+      );
+    });
+
     this.registerDomEvent(window, "scroll", () => this.hideFloatingBar(), {
       capture: true,
     });
@@ -482,6 +502,11 @@ export default class ReviewCommentsPlugin extends Plugin {
 
   updateFloatingBar() {
     if (!this.floatingBar) return;
+
+    if (this.isComposing) {
+      this.hideFloatingBar();
+      return;
+    }
 
     const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!mdView) {
