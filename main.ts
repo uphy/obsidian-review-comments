@@ -379,7 +379,20 @@ export default class ReviewCommentsPlugin extends Plugin {
   }
 
   addCommentToSelection(editor: Editor, typeTag: string = "NOTE") {
-    const selection = editor.getSelection();
+    const rawSelection = editor.getSelection();
+
+    // 行全体を選択した場合など前後の改行が選択に含まれていると、その改行を
+    // {==...==}の中に埋め込んでしまい、本来その改行が担っていた前後行との
+    // 区切りがreplaceRangeで消費されて隣接行と結合してしまう。前後の改行は
+    // 選択から除外する（先に先頭を切り出してから残りの末尾を判定することで、
+    // 改行だけの選択で前後の除去量が重複するのを避ける）。
+    const leadingNewline = rawSelection.match(/^\n+/)?.[0] ?? "";
+    const rest = rawSelection.slice(leadingNewline.length);
+    const trailingNewline = rest.match(/\n+$/)?.[0] ?? "";
+    const selection = trailingNewline
+      ? rest.slice(0, -trailingNewline.length)
+      : rest;
+
     if (!selection) {
       new Notice("先にテキストを選択してください");
       return;
@@ -394,8 +407,13 @@ export default class ReviewCommentsPlugin extends Plugin {
       return;
     }
 
-    const from = editor.getCursor("from");
-    const to = editor.getCursor("to");
+    const fromOffset =
+      editor.posToOffset(editor.getCursor("from")) + leadingNewline.length;
+    const toOffset =
+      editor.posToOffset(editor.getCursor("to")) - trailingNewline.length;
+    const from = editor.offsetToPos(fromOffset);
+    const to = editor.offsetToPos(toOffset);
+
     new CommentInputModal(this.app, typeTag, (body) => {
       const date = formatDate(new Date(), this.settings.dateFormat);
       const author = sanitizeAuthor(this.settings.authorName);
@@ -403,7 +421,7 @@ export default class ReviewCommentsPlugin extends Plugin {
         body.trim() || "コメントを書く"
       );
       const wrapped = `{==${selection}==}{>>${author}|${date}|${typeTag}: ${commentBody}<<}`;
-      const insertOffset = editor.posToOffset(from);
+      const insertOffset = fromOffset;
       editor.replaceRange(wrapped, from, to);
       this.pendingPulseOffset = insertOffset;
       this.placeCaretAfterInsertion(editor, insertOffset, wrapped);
