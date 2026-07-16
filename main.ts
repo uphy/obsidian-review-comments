@@ -4,6 +4,7 @@ import {
   Editor,
   ItemView,
   MarkdownPostProcessorContext,
+  MarkdownRenderChild,
   MarkdownRenderer,
   MarkdownView,
   Modal,
@@ -11,6 +12,7 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
+  TFile,
   WorkspaceLeaf,
   editorInfoField,
   setIcon,
@@ -532,10 +534,47 @@ export default class ReviewCommentsPlugin extends Plugin {
     }
   }
 
-  renderCommentsInReadingMode(
+  async renderCommentsInReadingMode(
     el: HTMLElement,
-    _ctx: MarkdownPostProcessorContext
+    ctx: MarkdownPostProcessorContext
   ) {
+    // MarkdownRendererに渡すComponentはel専属のMarkdownRenderChildにする。
+    // ctx.addChild()に登録しておくと、このブロックがDOMから外れた（編集で
+    // 再レンダリングされた等）タイミングで自動的にunloadされ、pluginを
+    // componentとして使い回すよりも子コンポーネントが蓄積しない。
+    const renderChild = new MarkdownRenderChild(el);
+    ctx.addChild(renderChild);
+    const renderTasks: Promise<void>[] = [];
+
+    // ブロック全体がちょうど1つのCriticMarkupコメントのケース（見出し行等を
+    // まるごとコメントで囲んだ場合）。ハイライト部分を独立してMarkdown再レン
+    // ダリングすることで、通常のMarkdown構文解析の外側にいても見出し等が正し
+    // く描画されるようにする。
+    const wholeBlockRegex = new RegExp(`^${COMMENT_REGEX.source}$`);
+    const blockCandidates = Array.from(
+      el.querySelectorAll("p, li, td, th, blockquote")
+    ).filter((elm) => elm.children.length === 0);
+
+    for (const blockEl of blockCandidates) {
+      const m = (blockEl.textContent || "").match(wholeBlockRegex);
+      if (!m) continue;
+
+      const meta = parseMeta(m[2]);
+      const replaced = document.createElement("div");
+      replaced.className = "review-comment-block";
+
+      const content = replaced.createDiv({ cls: "review-comment-block-content" });
+      renderTasks.push(
+        renderIntoInlineContext(this.app, m[1], content, ctx.sourcePath, renderChild)
+      );
+
+      appendCommentBubble(replaced, meta, () =>
+        this.deleteCommentInFile(ctx.sourcePath, m[0], m[1])
+      );
+      blockEl.replaceWith(replaced);
+    }
+
+    // 表セル内の値など、ブロックの一部だけがCriticMarkupのケース。
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
     const textNodes: Text[] = [];
     let node: Node | null;
@@ -560,13 +599,18 @@ export default class ReviewCommentsPlugin extends Plugin {
         }
 
         const meta = parseMeta(m[2]);
+        const fullMatch = m[0];
+        const highlighted = m[1];
         const span = document.createElement("span");
         span.className = "review-comment-highlight";
-        span.dataset.type = meta.type;
-        span.textContent = m[1];
-        span.setAttribute(
-          "title",
-          `${TYPE_META[meta.type]?.icon || ""} ${meta.author} | ${meta.date}\n${meta.body}`
+
+        const content = span.createSpan({ cls: "review-comment-highlight-content" });
+        renderTasks.push(
+          renderIntoInlineContext(this.app, highlighted, content, ctx.sourcePath, renderChild)
+        );
+
+        appendCommentBubble(span, meta, () =>
+          this.deleteCommentInFile(ctx.sourcePath, fullMatch, highlighted)
         );
         frag.appendChild(span);
         lastIndex = m.index + m[0].length;
@@ -578,6 +622,25 @@ export default class ReviewCommentsPlugin extends Plugin {
       }
       tn.parentNode?.replaceChild(frag, tn);
     }
+
+    await Promise.all(renderTasks);
+  }
+
+  /**
+   * Reading View用の削除処理。post-processorには編集中のEditorインスタンス
+   * が渡ってこないため、ファイルを直接読み書きする（Vault.processでアトミッ
+   * クに読み込み→置換→保存する）。
+   */
+  async deleteCommentInFile(
+    sourcePath: string,
+    fullMatch: string,
+    highlighted: string
+  ) {
+    const file = this.app.vault.getAbstractFileByPath(sourcePath);
+    if (!(file instanceof TFile)) return;
+    await this.app.vault.process(file, (data) =>
+      data.replace(fullMatch, highlighted)
+    );
   }
 }
 
