@@ -149,7 +149,8 @@ function parseMeta(meta: string): ParsedMeta {
  * MarkdownRenderer.render は常にブロック要素でラップして返すため、
  * ハイライト対象が単一の <p> になっている場合はその中身だけ展開して
  * インライン文脈（表セル・見出し以外の地の文など）に自然に溶け込ませる。
- * 見出し・リスト等のブロック構文はそのまま挿入する。
+ * 見出し・リスト等のブロック構文はそのまま挿入する（表示はCSS側で
+ * display: inline に上書きし、同じ行に流し込む）。
  */
 async function renderIntoInlineContext(
   app: App,

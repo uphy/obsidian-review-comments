@@ -126,8 +126,13 @@
   display: inline;
 }
 
-.review-comment-widget-content > p,
-.review-comment-highlight-content > p {
+/* 見出し・リスト等のブロック構文をそのまま挿入した場合でも、地の文やLive
+   Previewの吹き出しウィジェット内では改行させず同じ行に流し込む。直接の子要素は
+   種類を問わず全てinline化する（将来レンダラーが生成しうるtable等にも追従できる
+   よう、タグ名を列挙せずワイルドカードにする）。フォントサイズ・太字などの見た目
+   はタグ自体に残るのでheadingらしさは保たれる。 */
+.review-comment-widget-content > *,
+.review-comment-highlight-content > * {
   display: inline;
   margin: 0;
 }
