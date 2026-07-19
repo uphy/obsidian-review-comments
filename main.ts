@@ -1,305 +1,33 @@
 import {
-  App,
-  Component,
   Editor,
-  ItemView,
   MarkdownPostProcessorContext,
   MarkdownRenderChild,
-  MarkdownRenderer,
   MarkdownView,
-  Modal,
   Notice,
   Plugin,
-  PluginSettingTab,
-  Setting,
   TFile,
-  WorkspaceLeaf,
-  editorInfoField,
-  setIcon,
 } from "obsidian";
+import type { ReviewCommentsSettings } from "./src/types";
+import { DEFAULT_SETTINGS, TYPES, VIEW_TYPE_COMMENTS } from "./src/types";
 import {
-  Decoration,
-  DecorationSet,
-  EditorView,
-  ViewPlugin,
-  ViewUpdate,
-  WidgetType,
-} from "@codemirror/view";
-import { RangeSetBuilder } from "@codemirror/state";
+  COMMENT_REGEX,
+  escapeMultiline,
+  formatDate,
+  parseMeta,
+  sanitizeAuthor,
+  unescapeMultiline,
+} from "./src/criticmarkup";
+import {
+  CommentInputModal,
+  appendCommentBubble,
+  closeAllCommentPopovers,
+  renderIntoInlineContext,
+} from "./src/ui/comment-bubble";
+import { createCommentDecorationExtension } from "./src/editor-extension";
+import { CommentsView, ReviewCommentsSettingTab } from "./src/views";
 
-interface ReviewCommentsSettings {
-  authorName: string;
-  dateFormat: "iso" | "japanese";
-}
-
-const DEFAULT_SETTINGS: ReviewCommentsSettings = {
-  authorName: "you",
-  dateFormat: "iso",
-};
-
-const COMMENT_REGEX = /\{==([\s\S]+?)==\}\{>>([\s\S]+?)<<\}/g;
 /** compositionend後、compositionstartが即座に再発火しないか待つグレース期間(ms) */
 const COMPOSITION_END_GRACE_MS = 150;
-const VIEW_TYPE_COMMENTS = "review-comments-view";
-
-const TYPES: { id: string; tag: string; label: string; icon: string; lucide: string }[] = [
-  { id: "ask", tag: "ASK", label: "Ask", icon: "❓", lucide: "help-circle" },
-  { id: "edit", tag: "EDIT", label: "Edit", icon: "✏️", lucide: "pencil" },
-  { id: "praise", tag: "PRAISE", label: "Praise", icon: "👍", lucide: "thumbs-up" },
-  { id: "note", tag: "NOTE", label: "Note", icon: "💬", lucide: "message-circle" },
-];
-
-// 吹き出しボタンはテーマに追従するLucideアイコンを使う（絵文字はOS依存でテーマ色に馴染まないため）
-const TYPE_META: Record<string, { icon: string; lucide: string }> = TYPES.reduce(
-  (acc, t) => {
-    acc[t.tag] = { icon: t.icon, lucide: t.lucide };
-    return acc;
-  },
-  {} as Record<string, { icon: string; lucide: string }>
-);
-
-interface ParsedMeta {
-  author: string;
-  date: string;
-  type: string;
-  body: string;
-}
-
-class CommentInputModal extends Modal {
-  private readonly typeTag: string;
-  private readonly onSubmit: (body: string) => void;
-
-  constructor(app: App, typeTag: string, onSubmit: (body: string) => void) {
-    super(app);
-    this.typeTag = typeTag;
-    this.onSubmit = onSubmit;
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("review-comment-modal");
-    this.setTitle(`Add ${this.typeTag} comment`);
-
-    contentEl.createEl("p", {
-      text: "複数行や箇条書きもそのまま入力できます。",
-      cls: "review-comment-modal-help",
-    });
-
-    const textarea = contentEl.createEl("textarea", {
-      cls: "review-comment-modal-textarea",
-    });
-    textarea.placeholder = "例:\n1. ここを修正したい\n・理由\n・補足";
-
-    const actions = contentEl.createDiv({
-      cls: "review-comment-modal-actions",
-    });
-    const cancelBtn = actions.createEl("button", {
-      text: "Cancel",
-      cls: "mod-muted",
-    });
-    const submitBtn = actions.createEl("button", {
-      text: "Add comment",
-      cls: "mod-cta",
-    });
-
-    cancelBtn.addEventListener("click", () => this.close());
-    submitBtn.addEventListener("click", () => this.submit(textarea.value));
-    textarea.addEventListener("keydown", (evt: KeyboardEvent) => {
-      if ((evt.metaKey || evt.ctrlKey) && evt.key === "Enter") {
-        evt.preventDefault();
-        this.submit(textarea.value);
-      }
-    });
-
-    window.setTimeout(() => textarea.focus(), 0);
-  }
-
-  private submit(body: string) {
-    this.onSubmit(body);
-    this.close();
-  }
-}
-
-function parseMeta(meta: string): ParsedMeta {
-  const newFmt = meta.match(/^([^|]+)\|([^|]+)\|([A-Z]+):\s*([\s\S]*)$/);
-  if (newFmt) {
-    return {
-      author: newFmt[1].trim(),
-      date: newFmt[2].trim(),
-      type: newFmt[3].trim(),
-      body: newFmt[4].trim(),
-    };
-  }
-
-  const oldFmt = meta.match(/^([^|]+)\|([^|:]+):\s*([\s\S]*)$/);
-  if (oldFmt) {
-    return {
-      author: oldFmt[1].trim(),
-      date: oldFmt[2].trim(),
-      type: "NOTE",
-      body: oldFmt[3].trim(),
-    };
-  }
-
-  return { author: "", date: "", type: "NOTE", body: meta };
-}
-
-/**
- * MarkdownRenderer.render は常にブロック要素でラップして返すため、
- * ハイライト対象が単一の <p> になっている場合はその中身だけ展開して
- * インライン文脈（表セル・見出し以外の地の文など）に自然に溶け込ませる。
- * 見出し・リスト等のブロック構文はそのまま挿入する（表示はCSS側で
- * display: inline に上書きし、同じ行に流し込む）。
- */
-async function renderIntoInlineContext(
-  app: App,
-  markdown: string,
-  target: HTMLElement,
-  sourcePath: string,
-  component: Component
-) {
-  const tmp = document.createElement("div");
-  await MarkdownRenderer.render(app, markdown, tmp, sourcePath, component);
-  if (tmp.children.length === 1 && tmp.firstElementChild?.tagName === "P") {
-    const p = tmp.firstElementChild;
-    while (p.firstChild) target.appendChild(p.firstChild);
-  } else {
-    while (tmp.firstChild) target.appendChild(tmp.firstChild);
-  }
-}
-
-/**
- * 吹き出しボタン＋クリックで開閉するポップオーバーを container に追加する。
- * onDelete を渡すと、ポップオーバー右上に削除（×）ボタンが付き、クリックで
- * コメント記法を除去してハイライトされていたテキストだけを残す。
- */
-function appendCommentBubble(
-  container: HTMLElement,
-  meta: ParsedMeta,
-  onDelete?: () => void
-) {
-  container.addClass("review-comment-anchor");
-  container.dataset.type = meta.type;
-
-  const btn = container.createEl("button", {
-    cls: "review-comment-bubble-btn",
-    attr: { type: "button", "aria-label": "コメントを表示" },
-  });
-  setIcon(btn, TYPE_META[meta.type]?.lucide || "message-circle");
-
-  const popover = container.createDiv({ cls: "review-comment-bubble-popover" });
-
-  if (onDelete) {
-    const closeBtn = popover.createEl("button", {
-      cls: "review-comment-bubble-popover-close",
-      attr: { type: "button", "aria-label": "コメントを削除" },
-    });
-    setIcon(closeBtn, "x");
-    closeBtn.addEventListener("mousedown", (e) => e.preventDefault());
-    closeBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      closeAllCommentPopovers();
-      onDelete();
-    });
-  }
-
-  const header = popover.createDiv({ cls: "review-comment-bubble-popover-header" });
-  header.setText(`${meta.author} · ${meta.date}`);
-  const body = popover.createDiv({ cls: "review-comment-bubble-popover-body" });
-  body.setText(meta.body);
-
-  btn.addEventListener("mousedown", (e) => e.preventDefault());
-  btn.addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const isOpen = popover.hasClass("is-open");
-    closeAllCommentPopovers();
-    if (!isOpen) popover.addClass("is-open");
-  });
-}
-
-function closeAllCommentPopovers() {
-  document
-    .querySelectorAll(".review-comment-bubble-popover.is-open")
-    .forEach((el) => el.removeClass("is-open"));
-}
-
-class CommentWidget extends WidgetType {
-  // Markdown再レンダリングが登録する子コンポーネントを受け止める専用インスタンス。
-  // decoration再構築のたびにwidgetは使い捨てられるため、destroy()でunloadして
-  // 蓄積させない（親のPluginをcomponentとして使い回すと解放されずリークする）。
-  private renderComponent: Component | null = null;
-
-  constructor(
-    private readonly highlighted: string,
-    private readonly meta: ParsedMeta,
-    private readonly app: App,
-    private readonly sourcePath: string,
-    private readonly range: { from: number; to: number },
-    private readonly pulse: boolean = false
-  ) {
-    super();
-  }
-
-  eq(other: CommentWidget): boolean {
-    // pulse は意図的に比較から除外する。挿入直後に1回だけpulseクラス付きで
-    // 生成したDOM要素は、以後decorationが再構築されても使い回されてよく
-    // （CSSアニメーションは1回再生されればそのまま自然に終わる）、比較に
-    // 含めるとpulse終了後にDOM要素が余分に作り直されてしまう。
-    return (
-      other.highlighted === this.highlighted &&
-      other.sourcePath === this.sourcePath &&
-      other.range.from === this.range.from &&
-      other.range.to === this.range.to &&
-      other.meta.type === this.meta.type &&
-      other.meta.author === this.meta.author &&
-      other.meta.date === this.meta.date &&
-      other.meta.body === this.meta.body
-    );
-  }
-
-  toDOM(view: EditorView): HTMLElement {
-    const wrapper = document.createElement("span");
-    wrapper.className = "review-comment-widget";
-    if (this.pulse) {
-      wrapper.addClass("review-comment-widget-pulse");
-    }
-
-    this.renderComponent = new Component();
-    this.renderComponent.load();
-
-    const content = wrapper.createSpan({ cls: "review-comment-widget-content" });
-    void renderIntoInlineContext(
-      this.app,
-      this.highlighted,
-      content,
-      this.sourcePath,
-      this.renderComponent
-    );
-
-    appendCommentBubble(wrapper, this.meta, () => {
-      view.dispatch({
-        changes: {
-          from: this.range.from,
-          to: this.range.to,
-          insert: this.highlighted,
-        },
-      });
-    });
-    return wrapper;
-  }
-
-  destroy(): void {
-    this.renderComponent?.unload();
-    this.renderComponent = null;
-  }
-
-  ignoreEvent(): boolean {
-    return true;
-  }
-}
 
 export default class ReviewCommentsPlugin extends Plugin {
   settings: ReviewCommentsSettings = DEFAULT_SETTINGS;
@@ -418,9 +146,9 @@ export default class ReviewCommentsPlugin extends Plugin {
       const date = formatDate(new Date(), this.settings.dateFormat);
       const author = sanitizeAuthor(this.settings.authorName);
       const commentBody = this.escapeCommentBody(
-        body.trim() || "コメントを書く"
+        escapeMultiline(body.trim() || "コメントを書く")
       );
-      const wrapped = `{==${selection}==}{>>${author}|${date}|${typeTag}: ${commentBody}<<}`;
+      const wrapped = `{==${escapeMultiline(selection)}==}{>>${author}|${date}|${typeTag}: ${commentBody}<<}`;
       const insertOffset = fromOffset;
       editor.replaceRange(wrapped, from, to);
       this.pendingPulseOffset = insertOffset;
@@ -620,16 +348,17 @@ export default class ReviewCommentsPlugin extends Plugin {
       if (!m) continue;
 
       const meta = parseMeta(m[2]);
+      const highlighted = unescapeMultiline(m[1]);
       const replaced = document.createElement("div");
       replaced.className = "review-comment-block";
 
       const content = replaced.createDiv({ cls: "review-comment-block-content" });
       renderTasks.push(
-        renderIntoInlineContext(this.app, m[1], content, ctx.sourcePath, renderChild)
+        renderIntoInlineContext(this.app, highlighted, content, ctx.sourcePath, renderChild)
       );
 
       appendCommentBubble(replaced, meta, () =>
-        this.deleteCommentInFile(ctx.sourcePath, m[0], m[1])
+        this.deleteCommentInFile(ctx.sourcePath, m[0], highlighted)
       );
       blockEl.replaceWith(replaced);
     }
@@ -660,7 +389,7 @@ export default class ReviewCommentsPlugin extends Plugin {
 
         const meta = parseMeta(m[2]);
         const fullMatch = m[0];
-        const highlighted = m[1];
+        const highlighted = unescapeMultiline(m[1]);
         const span = document.createElement("span");
         span.className = "review-comment-highlight";
 
@@ -701,308 +430,5 @@ export default class ReviewCommentsPlugin extends Plugin {
     await this.app.vault.process(file, (data) =>
       data.replace(fullMatch, highlighted)
     );
-  }
-}
-
-function sanitizeAuthor(name: string): string {
-  const trimmed = (name || "").trim();
-  const stripped = trimmed.replace(/[|<>{}=]/g, "_");
-  return stripped || "you";
-}
-
-function formatDate(d: Date, format: "iso" | "japanese"): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  if (format === "japanese") return `${y}年${m}月${day}日`;
-  return `${y}-${m}-${day}`;
-}
-
-function createCommentDecorationExtension(plugin: ReviewCommentsPlugin) {
-  return ViewPlugin.fromClass(
-    class {
-      decorations: DecorationSet;
-
-      constructor(view: EditorView) {
-        this.decorations = this.buildDecorations(view);
-      }
-
-      update(update: ViewUpdate) {
-        if (
-          update.docChanged ||
-          update.viewportChanged ||
-          update.selectionSet
-        ) {
-          this.decorations = this.buildDecorations(update.view);
-        }
-      }
-
-      buildDecorations(view: EditorView): DecorationSet {
-        const builder = new RangeSetBuilder<Decoration>();
-        const text = view.state.doc.toString();
-        const regex = new RegExp(COMMENT_REGEX);
-        let m: RegExpExecArray | null;
-        const ranges = view.state.selection.ranges;
-        const info = view.state.field(editorInfoField, false);
-        const sourcePath = info?.file?.path ?? "";
-
-        while ((m = regex.exec(text))) {
-          const start = m.index;
-          const end = start + m[0].length;
-          // カーソル・選択範囲がこのコメントの内部に実際に入り込んでいるとき
-          // だけ生のCriticMarkup記法のまま編集させる（wikilinkのconcealと同
-          // じfocus-awareパターン）。境界にちょうど接しているだけ（例:挿入
-          // 直後にキャレットがコメント直後にある状態）はrendered mode（widget
-          // 表示）のままにする。マルチカーソルの場合は全rangeを見る。
-          const cursorInside = ranges.some((r) => r.from < end && r.to > start);
-
-          if (cursorInside) {
-            const highlightTextStart = start + 3;
-            const highlightTextEnd = highlightTextStart + m[1].length;
-            const metaStart = highlightTextEnd + 2;
-
-            builder.add(
-              highlightTextStart,
-              highlightTextEnd,
-              Decoration.mark({ class: "review-comment-highlight-live" })
-            );
-            builder.add(
-              metaStart,
-              end,
-              Decoration.mark({ class: "review-comment-meta-live" })
-            );
-          } else {
-            const meta = parseMeta(m[2]);
-            const isPulseTarget = plugin.pendingPulseOffset === start;
-            if (isPulseTarget) {
-              plugin.pendingPulseOffset = null;
-            }
-            builder.add(
-              start,
-              end,
-              Decoration.replace({
-                widget: new CommentWidget(
-                  m[1],
-                  meta,
-                  plugin.app,
-                  sourcePath,
-                  { from: start, to: end },
-                  isPulseTarget
-                ),
-              })
-            );
-          }
-        }
-
-        return builder.finish();
-      }
-    },
-    {
-      decorations: (v) => v.decorations,
-    }
-  );
-}
-
-class CommentsView extends ItemView {
-  plugin: ReviewCommentsPlugin;
-  lastMarkdownView: MarkdownView | null = null;
-
-  constructor(leaf: WorkspaceLeaf, plugin: ReviewCommentsPlugin) {
-    super(leaf);
-    this.plugin = plugin;
-  }
-
-  getViewType() {
-    return VIEW_TYPE_COMMENTS;
-  }
-
-  getDisplayText() {
-    return "Review Comments";
-  }
-
-  getIcon() {
-    return "message-circle";
-  }
-
-  async onOpen() {
-    this.renderComments();
-    this.registerEvent(
-      this.app.workspace.on("active-leaf-change", () => this.renderComments())
-    );
-    this.registerEvent(
-      this.app.workspace.on("editor-change", () => this.renderComments())
-    );
-  }
-
-  async onClose() {}
-
-  getMarkdownView(): MarkdownView | null {
-    const activeMdView =
-      this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-    if (activeMdView) {
-      this.lastMarkdownView = activeMdView;
-      return activeMdView;
-    }
-
-    if (
-      this.lastMarkdownView &&
-      this.plugin.app.workspace
-        .getLeavesOfType("markdown")
-        .some((leaf) => leaf.view === this.lastMarkdownView)
-    ) {
-      return this.lastMarkdownView;
-    }
-
-    this.lastMarkdownView = null;
-    return null;
-  }
-
-  jumpTo(mdView: MarkdownView, offset: number, length: number) {
-    this.plugin.app.workspace.setActiveLeaf(mdView.leaf, { focus: true });
-    const editor = mdView.editor;
-    const pos = editor.offsetToPos(offset);
-    const endPos = editor.offsetToPos(offset + length);
-    editor.setSelection(pos, endPos);
-    editor.scrollIntoView({ from: pos, to: endPos }, true);
-    editor.focus();
-  }
-
-  renderComments() {
-    const container = this.containerEl.children[1] as HTMLElement;
-    container.empty();
-    new Setting(container).setName("Review Comments").setHeading();
-
-    const mdView = this.getMarkdownView();
-    if (!mdView) {
-      container.createEl("p", {
-        text: "マークダウンファイルを開いてください",
-      });
-      return;
-    }
-
-    const text = mdView.editor.getValue();
-    const regex = new RegExp(COMMENT_REGEX);
-    type Match = {
-      highlighted: string;
-      meta: ParsedMeta;
-      rawMeta: string;
-      offset: number;
-      full: string;
-    };
-    const matches: Match[] = [];
-    let m: RegExpExecArray | null;
-
-    while ((m = regex.exec(text))) {
-      matches.push({
-        highlighted: m[1],
-        meta: parseMeta(m[2]),
-        rawMeta: m[2],
-        offset: m.index,
-        full: m[0],
-      });
-    }
-
-    if (matches.length === 0) {
-      container.createEl("p", {
-        text: "コメントはまだありません。テキストを選択して上に出るバーから種類を選んでください。",
-        cls: "review-comment-empty",
-      });
-      return;
-    }
-
-    matches.forEach((match) => {
-      const card = container.createDiv({ cls: "review-comment-card" });
-      card.dataset.type = match.meta.type;
-
-      const header = card.createDiv({ cls: "review-comment-card-header" });
-      const icon = header.createSpan({ cls: "review-comment-card-icon" });
-      icon.textContent = TYPE_META[match.meta.type]?.icon || "💬";
-      const meta = header.createSpan({ cls: "review-comment-card-meta" });
-      meta.textContent = `${match.meta.author} · ${match.meta.date}`;
-
-      const original = card.createDiv({ cls: "review-comment-card-original" });
-      original.textContent = `"${match.highlighted}"`;
-
-      const body = card.createDiv({ cls: "review-comment-card-body" });
-      body.textContent = match.meta.body;
-
-      const actions = card.createDiv({ cls: "review-comment-card-actions" });
-      const jumpBtn = actions.createEl("button", {
-        text: "Jump",
-        cls: "review-comment-action-btn",
-      });
-      jumpBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.jumpTo(mdView, match.offset, match.full.length);
-      });
-
-      const resolveBtn = actions.createEl("button", {
-        text: "Resolve",
-        cls: "review-comment-action-btn review-comment-resolve-btn",
-      });
-      resolveBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const editor = mdView.editor;
-        const value = editor.getValue();
-        const newValue = value.replace(match.full, match.highlighted);
-        editor.setValue(newValue);
-        this.renderComments();
-      });
-
-      card.addEventListener("click", () => {
-        this.jumpTo(mdView, match.offset, match.full.length);
-      });
-    });
-  }
-}
-
-class ReviewCommentsSettingTab extends PluginSettingTab {
-  plugin: ReviewCommentsPlugin;
-
-  constructor(app: App, plugin: ReviewCommentsPlugin) {
-    super(app, plugin);
-    this.plugin = plugin;
-  }
-
-  display() {
-    const { containerEl } = this;
-    containerEl.empty();
-
-    new Setting(containerEl)
-      .setName("Author name")
-      .setDesc("コメントに記録される名前")
-      .addText((text) =>
-        text
-          .setValue(this.plugin.settings.authorName)
-          .onChange(async (value) => {
-            this.plugin.settings.authorName = value || "you";
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("Date format")
-      .addDropdown((dd) =>
-        dd
-          .addOption("iso", "2026-05-13")
-          .addOption("japanese", "2026年05月13日")
-          .setValue(this.plugin.settings.dateFormat)
-          .onChange(async (value: string) => {
-            this.plugin.settings.dateFormat = value as "iso" | "japanese";
-            await this.plugin.saveSettings();
-          })
-      );
-
-    containerEl.createEl("h3", { text: "コメント種別" });
-    const list = containerEl.createEl("ul");
-    for (const t of TYPES) {
-      const li = list.createEl("li");
-      li.textContent = `${t.icon} ${t.label} → タグ: ${t.tag}（コマンド: Add ${t.label} comment）`;
-    }
-
-    containerEl.createEl("p", {
-      text: "各タイプは個別コマンドとして登録されているので、設定→ホットキーで好きなショートカットを割り当てられます。",
-      cls: "setting-item-description",
-    });
   }
 }
